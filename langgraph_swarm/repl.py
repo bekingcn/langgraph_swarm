@@ -1,9 +1,9 @@
 import os
 from typing import Literal
 from langchain_core.messages import HumanMessage
-from .core import create_swarm_workflow, get_agent_name_from_message
+from .core import create_swarm_workflow
 from .types import Agent
-from util import default_print_messages, create_default_llm
+from .util import default_print_messages, create_default_llm, get_agent_name_from_message
 
 def run_demo_loop(
     starting_agent: Agent, 
@@ -43,9 +43,11 @@ def run_demo_loop(
         messages = resp["messages"] + [user_message]
         current_agent = resp["agent_name"]
         if stream:
-            for _resp in wf.stream(input={"messages": messages, "agent_name": current_agent, "handoff": True}):
-                print(_resp)
-            resp = _resp
+            for _chunk in wf.stream(input={"messages": messages, "agent_name": current_agent, "handoff": True}):
+                for _agent, _resp in _chunk.items():
+                    if debug:
+                        print(f"==> {_agent}: {_resp}")
+                resp = _resp
         else:
             resp = wf.invoke(input={"messages": messages, "agent_name": current_agent, "handoff": True})
         # pretty_print(resp["messages"])

@@ -210,9 +210,9 @@ class Swarm:
         agent: Agent = None,
         context_variables: dict = {},
         stream: bool = False,
-        max_turns: int = float("inf"),
+        max_turns: int = 25,
         execute_tools: bool = True,
-    ) -> Response | Generator:
+    ) -> Response:
         if agent:
             self.agent = agent
             # in case you want to create a new workflow with a different agent
@@ -222,27 +222,26 @@ class Swarm:
                 self.workflow =self._create_workflow()
         agent_name = self.agent.name
         # TODO: use max_turns instead of Graph's recursion
-        while self.agent:
-            init_len = len(messages)
-            if stream:
-                for _chunk in self.workflow.stream(
-                    input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables},
-                    config={"recursion_limit": max_turns},
-                    ):
-                    for _agent, _resp in _chunk.items():
-                        if self.debug:
-                            print(_agent, ": ", _resp)
-                        yield {_agent: _resp}
-                    resp = _resp
-            else:
-                resp = self.workflow.invoke(
-                    input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables},
-                    config={"recursion_limit": max_turns},
-                )
-            agent_name = resp["agent_name"]
-            self.agent = self.get_agent(agent_name, False)
-            return Response(
-                messages=resp["messages"][init_len:],
-                agent=resp["agent_name"],
-                context_variables={},
+        init_len = len(messages)
+        if stream:
+            for _chunk in self.workflow.stream(
+                input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables},
+                config={"recursion_limit": max_turns},
+                ):
+                for _agent, _resp in _chunk.items():
+                    if self.debug:
+                        print(_agent, ": ", _resp)
+                    # yield {_agent: _resp}
+                resp = _resp
+        else:
+            resp = self.workflow.invoke(
+                input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables},
+                config={"recursion_limit": max_turns},
             )
+        agent_name = resp["agent_name"]
+        self.agent = self.get_agent(agent_name, False)
+        return Response(
+            messages=resp["messages"][init_len:],
+            agent=resp["agent_name"],
+            context_variables={},
+        )
