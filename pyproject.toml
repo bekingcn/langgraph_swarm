@@ -1,0 +1,47 @@
+[tool.poetry]
+name = "langgraph_swarm"
+version = "0.1.0"
+description = ""
+authors = ["Beking <beking_cn@hotmail.com>"]
+license = "Apache"
+readme = "README.md"
+packages = [{ include = "langgraph_swarm" }]
+repository = "https://github.com/bekingcn/langgraph_swarm"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+openai = "^1.45.0"
+langchain = "^0.3"
+langchain-openai = "^0.2"
+langgraph = "^0.2.20"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-asyncio = "^0.21.1"
+coverage = "^7.3.2"
+pyright = "^1.1.360"
+jsonref = "^1.1.0"
+pre-commit = "^3.7.0"
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.pyright]
+include = ["langgraph_swarm"]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "src/experimental",
+    "src/typestubs",
+    "**/tests/**",
+]
+pythonVersion = "3.10"
+reportMissingImports = "warning"
+reportUnknownLambdaType = "warning"
+reportMissingTypeStubs = "warning"
+typeCheckingMode = "off"  # TODO: using strict mode
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

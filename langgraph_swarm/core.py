@@ -1,28 +1,28 @@
-from typing import Dict, Tuple, Dict, Optional, Sequence, TypedDict
-
+from typing import Callable, Dict, List, Literal, Tuple, Dict, Optional, Sequence, Type, TypedDict
+import re
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
 )
 from langchain_core.runnables import Runnable
-
-from langgraph.checkpoint import BaseCheckpointSaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.graph import CompiledGraph
-
-
-
 from langchain_core.messages import HumanMessage, AIMessage
-
 from langchain_core.tools import tool
 
-from .agent import _create_swarm_agent, AGENT_RESPONSE_PREFIX
-from .types import Agent
+from langgraph_swarm.util import add_agent_name_to_messages, create_default_llm, default_print_messages
+
+from .agent_v03 import _create_swarm_agent  , AGENT_RESPONSE_PREFIX
+from .types import Agent, Response
+
+def _generate_function_name(agent_name: str):
+    return re.sub(r"[^0-9a-z_]", "_", agent_name.lower())
 
 def create_swarm_handoff(agent: Agent | str, func_name: str|None = None):
     name = agent if isinstance(agent, str) else agent.name
     # refactoring name to be a function name
-    func_name = func_name or name.replace(" ", "_").lower()
+    func_name = _generate_function_name(name)
     
     @tool
     def _agent_as_tool():
@@ -30,13 +30,13 @@ def create_swarm_handoff(agent: Agent | str, func_name: str|None = None):
         return f"{AGENT_RESPONSE_PREFIX}{name}"
 
     _agent_as_tool.description = f"Call this function if a user is asking about a topic that should be handled by {name}."
-    _agent_as_tool.name = func_name
+    _agent_as_tool.name = f"transfer_to_{func_name}"
     return _agent_as_tool
 
 def create_swarm_backlink(agent: Agent | str, func_name: str|None = None):
     name = agent if isinstance(agent, str) else agent.name
     # refactoring name to be a function name
-    func_name = name.replace(" ", "_").lower()
+    func_name = _generate_function_name(name)
     
     @tool
     def _agent_as_tool():
@@ -44,17 +44,8 @@ def create_swarm_backlink(agent: Agent | str, func_name: str|None = None):
         return f"{AGENT_RESPONSE_PREFIX}{name}"
 
     _agent_as_tool.description = f"Call this function if a user is asking about a topic that is not handled by the current agent."
-    _agent_as_tool.name = func_name
+    _agent_as_tool.name = f"transfer_to_{func_name}"
     return _agent_as_tool
-
-def add_agent_name_to_messages(agent_name: str, messages: Sequence[BaseMessage]):
-    for message in messages:
-        if isinstance(message, AIMessage) and message.name is None:
-            message.name = agent_name
-        message.additional_kwargs["agent_name"] = agent_name
-        
-def get_agent_name_from_message(message: BaseMessage):
-    return message.additional_kwargs.get("agent_name", None)
 
 def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|None = None, agent_map={}):
     
@@ -64,19 +55,18 @@ def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|Non
         tools.append(create_swarm_handoff(handoff))
     if backlink_agent:
         tools.append(create_swarm_backlink(backlink_agent))
-    print(f"{agent.name} tools",tools)
     lc_agent = _create_swarm_agent(
         model=llm,
         tools=tools,
         agent_name=agent.name,
-        messages_modifier=agent.instructions,
+        state_modifier=agent.instructions,
         debug=False
     )
     
     agent_map[agent.name] = (agent, lc_agent)
     
     for handoff in agent.handoffs:
-        create_swarm_agent_and_handoffs(llm, handoff, backlink_agent=agent if handoff.backlink else None)
+        create_swarm_agent_and_handoffs(llm, handoff, backlink_agent=agent if handoff.backlink else None, agent_map=agent_map)
     
     return lc_agent
 
@@ -84,35 +74,31 @@ def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|Non
 class HandoffsState(TypedDict):
     """The state of the agent handoffs to other agents."""
 
-    messages: Sequence[BaseMessage] = []
+    messages: Sequence[BaseMessage] = None
     agent_name: Optional[str] = None
     handoff: bool = False
     user_end: bool = False
-    
+
 def create_swarm_workflow(
     llm,
-    entrypoint: Agent,
+    starting_agent: Agent,
+    state_scheme: Type[HandoffsState] = HandoffsState,
     with_user_agent: bool = False,
+    print_messages: None | Callable = None,
     checkpointer: Optional[BaseCheckpointSaver] = None,
     interrupt_before: Optional[Sequence[str]] = None,
     interrupt_after: Optional[Sequence[str]] = None,
     debug: bool = False,
-) -> Runnable:
-    
-    agent = entrypoint
     # hold all created agents with name and lc_agent
     agent_map: Dict[str, Tuple[Agent, CompiledGraph]] = {}
+) -> Runnable:
+    
+    agent = starting_agent
     
     create_swarm_agent_and_handoffs(llm, agent, backlink_agent=None, agent_map=agent_map)
     
     # Define a new graph
-    workflow = StateGraph(HandoffsState)
-    
-    def print_messages(state: HandoffsState, messages_from=0):
-        messages = state["messages"]
-        agent_name = state["agent_name"]      
-        for message in messages[messages_from:]:
-            print(f"{agent_name}[{message.type}]: {message}")
+    workflow = StateGraph(state_scheme)
     
     def human_agent_node(state: HandoffsState):
         user_input = input("User: ")
@@ -121,7 +107,7 @@ def create_swarm_workflow(
         return {"messages": [HumanMessage(content=user_input)]}
 
     def nop_agent_node(state: HandoffsState):
-        return {}
+        return state
     
     start_node = human_agent_node if with_user_agent else nop_agent_node
     
@@ -130,17 +116,23 @@ def create_swarm_workflow(
     branchs = {}
     from functools import partial
     for name, (agent, lc_agent) in agent_map.items():
+        # TODO: use a chain instead?
         def call_agent_node(state: HandoffsState, agent_name: str, lc_agent):
-            print("==> entering: ", agent_name)
+            if debug:
+                print("==> entering: ", agent_name)
             messages = state["messages"]
             init_len = len(messages)
-            agent_response = lc_agent.invoke(input={"messages": state["messages"], "next_agent": None, "agent_name": agent_name})
-            messages = agent_response["messages"]
+            resp = lc_agent.invoke(input={"messages": state["messages"], "next_agent": None, "agent_name": agent_name})
+            messages = resp["messages"]
             add_agent_name_to_messages(agent_name, messages[init_len:])
-            print_messages(agent_response, messages_from=init_len)
+            if print_messages:
+                print_messages(messages[init_len:])
             # if None, reponse only, otherwise next agent
-            next_agent = agent_response.get("next_agent", None)
-            if next_agent:
+            next_agent = resp.get("next_agent", None)
+            if next_agent in ["__end__"]:
+                # post_process here to handle `__end__` from `react_agent`
+                next_agent = None
+            if debug and next_agent:
                 print("==> handoff to: ", next_agent)
             return {"messages": messages, "agent_name": next_agent if next_agent else state["agent_name"], "handoff": next_agent is not None}
         
@@ -155,7 +147,8 @@ def create_swarm_workflow(
             return state["agent_name"]
         elif with_user_agent and not state.get("user_end", False) :
             # continue next loop with user input, with the current agent
-            print("==> continue with current agent: ", state["agent_name"])
+            if debug:
+                print("==> continue with current agent: ", state["agent_name"])
             return state["agent_name"]
         else:
             return "end"
@@ -173,3 +166,59 @@ def create_swarm_workflow(
         debug=debug,
     )
 
+class Swarm:
+    def __init__(self, 
+        agent: Agent=None,
+        llm=None,
+        state_scheme: Type[HandoffsState] = HandoffsState,
+        debug: bool = False,
+        print_messages: None | Callable = None,
+    ):
+        self.llm = llm
+        self.print_messages = print_messages or default_print_messages
+        self.debug = debug
+        self.state_scheme = state_scheme
+
+        self.agent = agent
+        if agent:
+            self.workflow = self._create_workflow()
+        self.agent_map = {}
+
+    def _create_workflow(self):
+        llm = self.llm or create_default_llm(self.agent.model)
+        return create_swarm_workflow(llm, self.agent, state_scheme=self.state_scheme, print_messages=self.print_messages, debug=self.debug, agent_map=self.agent_map)
+
+    def get_agent(self, name: str):
+        return self.agent_map[name][0]
+    
+    # for now, trying to be compatible with OpenAI Swarm
+    def run(
+        self,
+        messages: List,
+        agent: Agent = None,
+        agent_name: str = None,
+        context_variables: dict = {},
+        stream: bool = False,
+        max_turns: int = float("inf"),
+        execute_tools: bool = True,
+    ) -> Response:
+        if agent:
+            self.agent = agent
+            self.workflow =self._create_workflow()
+        agent_name = agent_name or self.agent.name
+        while agent_name:
+            init_len = len(messages)
+            if stream:
+                for _chunk in self.workflow.stream(input={"messages": messages, "agent_name": agent_name, "handoff": True}):
+                    for _agent, _resp in _chunk.items():
+                        print(_agent, ": ", _resp)
+                    resp = _resp
+            else:
+                resp = self.workflow.invoke(input={"messages": messages, "agent_name": agent_name, "handoff": True, **context_variables})
+            
+            self.agent = self.get_agent(agent_name)
+            return Response(
+                messages=resp["messages"][init_len:],
+                agent=resp["agent_name"],
+                context_variables={},
+            )

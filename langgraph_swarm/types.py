@@ -1,12 +1,14 @@
-from typing import List, Callable, Union
+from typing import List, Callable, Optional, Union
 from pydantic import BaseModel
 
 from langchain_core.tools import BaseTool
+from langchain_core.messages import BaseMessage
 
 # following swarm's model
 class Agent(BaseModel):
     name: str = "Agent"
-    model: str = "gpt-4o"
+    model: str = "llama3.2"
+    # TODO: use prompt template instead of Callable
     instructions: Union[str, Callable[[], str]] = "You are a helpful agent."
     handoffs: List["Agent"] = []
     backlink: bool = False
@@ -16,3 +18,8 @@ class Agent(BaseModel):
     
     def get_node_name(self):
         return self.name.replace(" ", "_").lower()
+
+class Response(BaseModel):
+    messages: List[BaseMessage] = []
+    agent: Optional[str] = None
+    context_variables: dict = {}

@@ -1,5 +1,3 @@
-
-
 from typing import Any, Callable, Dict, Optional, Sequence, Union, TypedDict, Annotated
 
 from langchain_core.language_models import LanguageModelLike
@@ -11,17 +9,17 @@ from langchain_core.messages import (
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langchain_core.tools import BaseTool
 
-from langgraph.checkpoint import BaseCheckpointSaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.graph import CompiledGraph
 from langgraph.prebuilt.tool_executor import ToolExecutor
-from langgraph.prebuilt.tool_node import ToolNode
+from langgraph.prebuilt import ToolNode, create_react_agent
 from langgraph.graph.message import add_messages
 from langgraph.managed import IsLastStep
 
 from langchain_core.messages import ToolMessage
 
-AGENT_RESPONSE_PREFIX = "handoff to "
+AGENT_RESPONSE_PREFIX = "transfer to "
 
 class AgentState(TypedDict):
     """The state of the agent."""
@@ -38,10 +36,14 @@ class AgentState(TypedDict):
     is_last_step: IsLastStep
 
 
-def agent_response(response: str) -> str | None:
+def _agent_response(response: str) -> str | None:
     if response.startswith(AGENT_RESPONSE_PREFIX):
         return response[len(AGENT_RESPONSE_PREFIX):]
     return None
+
+# NOTE: this is a refactoring of the langchain create_react_agent function
+#       to support swarm agent.
+#       added a branch to exit the agent if there is a agent handoff as swarm style
 def _create_swarm_agent(
     model: LanguageModelLike,
     tools: Union[ToolExecutor, Sequence[BaseTool]],
@@ -127,14 +129,14 @@ def _create_swarm_agent(
         messages = state["messages"]
         # 
         # TODO: this is a trick to check and get agent name to handoff
-        #   otherwise, we have to rewrite the tools executor to handle declared agent's responses
-        # if mutliple tools, we should find the latest one with handoff agent.
-        #   also, swarm only activates the latest one even multiple handoffs happen.
+        #   otherwise, we have to rewrite the tools executor to handle agent's responses
+        # if mutliple tools, we should find the latest one with handoff agent 
+        #   following the swarm's implementation
         agent_name = None
         for last_message in messages[::-1]:
             if not isinstance(last_message, ToolMessage):
                 break
-            agent_name = agent_response(last_message.content)
+            agent_name = _agent_response(last_message.content)
             if agent_name:
                 return {"next_agent": agent_name}
         else:
