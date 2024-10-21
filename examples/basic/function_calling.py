@@ -5,8 +5,6 @@ import dotenv
 from langgraph_swarm import Swarm, Agent, tool
 dotenv.load_dotenv()
 
-client = Swarm()
-
 
 @tool
 def get_weather(location) -> str:
@@ -28,6 +26,8 @@ agent = Agent(
     functions=[get_weather],
 )
 
+
+client = Swarm(agent=agent)
 messages = [{"role": "user", "content": "What's the weather in NYC?"}]
 
 response = client.run(agent=agent, messages=messages)

@@ -17,7 +17,7 @@ spanish_agent = Agent(
 
 english_agent.handoffs.append(spanish_agent)
 
-client = Swarm()
+client = Swarm(agent=english_agent)
 messages = [{"role": "user", "content": "Hola. ¿Como estás?"}]
 response = client.run(agent=english_agent, messages=messages)
 

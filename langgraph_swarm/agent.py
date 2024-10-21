@@ -41,7 +41,7 @@ def _agent_response(response: str) -> str | None:
         return response[len(AGENT_RESPONSE_PREFIX):]
     return None
 
-# NOTE: this is a refactoring of the langchain create_react_agent function
+# NOTE: this is a refactoring of the langchain v0.2 create_react_agent function
 #       to support swarm agent.
 #       added a branch to exit the agent if there is a agent handoff as swarm style
 def _create_swarm_agent(

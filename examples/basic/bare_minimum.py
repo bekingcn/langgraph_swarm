@@ -5,13 +5,13 @@ import dotenv
 from langgraph_swarm import Swarm, Agent
 dotenv.load_dotenv()
 
-client = Swarm()
-
 agent = Agent(
     name="Agent",
     instructions="You are a helpful agent.",
 )
 
+
+client = Swarm(agent=agent)
 messages = [{"role": "user", "content": "Hi!"}]
 response = client.run(agent=agent, messages=messages)
 

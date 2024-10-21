@@ -21,7 +21,7 @@ def pretty_print_messages(messages):
 messages = []
 agent = my_agent
 
-client = Swarm()
+client = Swarm(agent=agent)
 while True:
     user_input = input("> ")
     messages.append({"role": "user", "content": user_input})

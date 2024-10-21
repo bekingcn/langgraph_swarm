@@ -11,7 +11,7 @@ from typing import (
 )
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage, ToolCall
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langchain_core.tools import BaseTool
 
@@ -27,6 +27,8 @@ from langgraph.types import Checkpointer
 from typing import Dict, Any
 from langchain_core.messages import ToolMessage
 
+
+__CTX_VARS_NAME__ = "context_variables"
 AGENT_RESPONSE_PREFIX = "transfer to "
 
 class AgentState(TypedDict):
@@ -137,6 +139,17 @@ def _agent_response(response: str) -> str | None:
         return response[len(AGENT_RESPONSE_PREFIX):]
     return None
 
+# following swarm's implementation, pass the context variables to the tools if needed
+# any better way to do it?
+def _try_fill_tool_calls(tool_calls: Sequence[ToolCall], state: AgentState) -> None:
+    for tool_call in tool_calls:
+        args = tool_call.get("args", {})
+        if __CTX_VARS_NAME__ in args:
+            args[__CTX_VARS_NAME__] = state.get("context_variables", {})
+
+# NOTE: this is a refactoring of the langchain v0.3 create_react_agent function
+#       to support swarm agent.
+#       added a branch to exit the agent if there is a agent handoff as swarm style
 def _create_swarm_agent(
     model: BaseChatModel,
     tools: Union[ToolExecutor, Sequence[BaseTool], ToolNode],
@@ -240,7 +253,10 @@ def _create_swarm_agent(
                     )
                 ]
             }
+        # swarm added
         response.name = agent_name
+        if response.tool_calls:
+            _try_fill_tool_calls(response.tool_calls, state)
         # We return a list, because this will get added to the existing list
         return {"messages": [response]}
 
@@ -260,7 +276,10 @@ def _create_swarm_agent(
                     )
                 ]
             }
+        # swarm added
         response.name = agent_name
+        if response.tool_calls:
+            _try_fill_tool_calls(response.tool_calls, state)
         # We return a list, because this will get added to the existing list
         return {"messages": [response]}
 
@@ -268,7 +287,28 @@ def _create_swarm_agent(
     # If any of the tools are configured to return_directly after running,
     # our graph needs to check if these were called
     should_return_direct = {t.name for t in tool_classes if t.return_direct}
-    
+
+    # Define a new graph
+    workflow = StateGraph(state_schema or AgentState)
+
+    # Define the two nodes we will cycle between
+    workflow.add_node("agent", RunnableLambda(call_model, acall_model))
+    workflow.add_node("tools", tool_node)
+
+    # Set the entrypoint as `agent`
+    # This means that this node is the first one called
+    workflow.set_entry_point("agent")
+
+    # We now add a conditional edge
+    workflow.add_conditional_edges(
+        # First, we define the start node. We use `agent`.
+        # This means these are the edges taken after the `agent` node is called.
+        "agent",
+        # Next, we pass in the function that will determine which node is called next.
+        should_continue,
+    )
+
+    # swarm added    
     def check_tool_result(state: AgentState):
         # TODO: this is a trick to check and get agent name to handoff
         #   otherwise, we have to rewrite the tools executor to handle agent's responses
@@ -285,31 +325,11 @@ def _create_swarm_agent(
                 return {"next_agent": "__end__"}
         else:
             return {"next_agent": None}
-
-    # Define a new graph
-    workflow = StateGraph(state_schema or AgentState)
-
-    # Define the two nodes we will cycle between
-    workflow.add_node("agent", RunnableLambda(call_model, acall_model))
-    workflow.add_node("tools", tool_node)
-    workflow.add_node("post_tools", check_tool_result)
-
-    # Set the entrypoint as `agent`
-    # This means that this node is the first one called
-    workflow.set_entry_point("agent")
-
-    # We now add a conditional edge
-    workflow.add_conditional_edges(
-        # First, we define the start node. We use `agent`.
-        # This means these are the edges taken after the `agent` node is called.
-        "agent",
-        # Next, we pass in the function that will determine which node is called next.
-        should_continue,
-    )
-
     # We now add a normal edge from `tools` to `post_tools` for checking tools response.
+    workflow.add_node("post_tools", check_tool_result)
     workflow.add_edge("tools", "post_tools")
 
+    # swarm modified
     def route_tool_responses(state: AgentState) -> Literal["agent", "__end__"]:
         # additional check for handoff
         if state.get("next_agent", None):

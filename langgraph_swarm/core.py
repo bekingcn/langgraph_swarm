@@ -1,4 +1,4 @@
-from typing import Callable, Dict, List, Literal, Tuple, Dict, Optional, Sequence, Type, TypedDict
+from typing import Any, Callable, Dict, Generator, List, Literal, Tuple, Dict, Optional, Sequence, Type, TypedDict
 import re
 from langchain_core.messages import (
     AIMessage,
@@ -78,6 +78,7 @@ class HandoffsState(TypedDict):
     agent_name: Optional[str] = None
     handoff: bool = False
     user_end: bool = False
+    context_variables: dict = {}
 
 def create_swarm_workflow(
     llm,
@@ -91,7 +92,7 @@ def create_swarm_workflow(
     debug: bool = False,
     # hold all created agents with name and lc_agent
     agent_map: Dict[str, Tuple[Agent, CompiledGraph]] = {}
-) -> Runnable:
+) -> CompiledGraph:
     
     agent = starting_agent
     
@@ -122,7 +123,14 @@ def create_swarm_workflow(
                 print("==> entering: ", agent_name)
             messages = state["messages"]
             init_len = len(messages)
-            resp = lc_agent.invoke(input={"messages": state["messages"], "next_agent": None, "agent_name": agent_name})
+            resp = lc_agent.invoke(
+                input={
+                    "messages": state["messages"], 
+                    "next_agent": None, 
+                    "agent_name": agent_name, 
+                    "context_variables": state.get("context_variables", {})
+                }
+            )
             messages = resp["messages"]
             add_agent_name_to_messages(agent_name, messages[init_len:])
             if print_messages:
@@ -168,7 +176,7 @@ def create_swarm_workflow(
 
 class Swarm:
     def __init__(self, 
-        agent: Agent=None,
+        agent: Agent,
         llm=None,
         state_scheme: Type[HandoffsState] = HandoffsState,
         debug: bool = False,
@@ -178,45 +186,61 @@ class Swarm:
         self.print_messages = print_messages or default_print_messages
         self.debug = debug
         self.state_scheme = state_scheme
-
+        self.start_agent = agent
         self.agent = agent
+        self.agent_map = {}
         if agent:
             self.workflow = self._create_workflow()
-        self.agent_map = {}
 
-    def _create_workflow(self):
+    def _create_workflow(self) -> CompiledGraph:
         llm = self.llm or create_default_llm(self.agent.model)
         return create_swarm_workflow(llm, self.agent, state_scheme=self.state_scheme, print_messages=self.print_messages, debug=self.debug, agent_map=self.agent_map)
 
-    def get_agent(self, name: str):
-        return self.agent_map[name][0]
+    def get_agent(self, name: str, fail_if_not_found: bool = True):
+        if name in self.agent_map:
+            return self.agent_map[name][0]
+        if fail_if_not_found:
+            raise ValueError(f"Agent {name} not found")
+        return None
     
     # for now, trying to be compatible with OpenAI Swarm
     def run(
         self,
         messages: List,
         agent: Agent = None,
-        agent_name: str = None,
         context_variables: dict = {},
         stream: bool = False,
         max_turns: int = float("inf"),
         execute_tools: bool = True,
-    ) -> Response:
+    ) -> Response | Generator:
         if agent:
             self.agent = agent
-            self.workflow =self._create_workflow()
-        agent_name = agent_name or self.agent.name
-        while agent_name:
+            # in case you want to create a new workflow with a different agent
+            if agent.name not in self.agent_map:
+                self.start_agent = agent
+                self.agent_map = {}
+                self.workflow =self._create_workflow()
+        agent_name = self.agent.name
+        # TODO: use max_turns instead of Graph's recursion
+        while self.agent:
             init_len = len(messages)
             if stream:
-                for _chunk in self.workflow.stream(input={"messages": messages, "agent_name": agent_name, "handoff": True}):
+                for _chunk in self.workflow.stream(
+                    input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables},
+                    config={"recursion_limit": max_turns},
+                    ):
                     for _agent, _resp in _chunk.items():
-                        print(_agent, ": ", _resp)
+                        if self.debug:
+                            print(_agent, ": ", _resp)
+                        yield {_agent: _resp}
                     resp = _resp
             else:
-                resp = self.workflow.invoke(input={"messages": messages, "agent_name": agent_name, "handoff": True, **context_variables})
-            
-            self.agent = self.get_agent(agent_name)
+                resp = self.workflow.invoke(
+                    input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables},
+                    config={"recursion_limit": max_turns},
+                )
+            agent_name = resp["agent_name"]
+            self.agent = self.get_agent(agent_name, False)
             return Response(
                 messages=resp["messages"][init_len:],
                 agent=resp["agent_name"],

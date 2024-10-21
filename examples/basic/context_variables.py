@@ -21,7 +21,7 @@ def instructions(context_variables):
 @tool
 def print_account_details(context_variables: dict):
     """
-    Print account details
+    Print account details if user desires, otherwise not called.
     
     Args:
         context_variables (dict): The context variables.
@@ -41,7 +41,7 @@ agent = Agent(
     functions=[print_account_details],
 )
 
-client = Swarm()
+client = Swarm(agent=agent)
 context_variables = {"name": "James", "user_id": 123}
 
 response = client.run(
@@ -50,11 +50,17 @@ response = client.run(
     context_variables=context_variables,
     stream=True,
 )
-print(response.messages[-1].content)
 
-response = client.run(
-    messages=[{"role": "user", "content": "Print my account details!"}],
-    agent=agent,
-    context_variables=context_variables,
-)
-print(response.messages[-1].content)
+for resp in response:
+    if isinstance(resp, dict):
+        for _agent, _resp in resp.items():
+            print(_agent, ": ", _resp)
+    else:
+        print(response.messages[-1].content)
+
+# response = client.run(
+#     messages=[{"role": "user", "content": "Print my account details!"}],
+#     agent=agent,
+#     context_variables=context_variables,
+# )
+# print(response.messages[-1].content)
