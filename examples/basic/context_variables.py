@@ -1,10 +1,8 @@
-import sys
 from typing import Optional
-sys.path.append("../../")
-import dotenv
 
 from langgraph_swarm import Swarm, Agent, tool
 from langgraph_swarm.core import HandoffsState
+import dotenv
 dotenv.load_dotenv()
 
 

@@ -24,24 +24,24 @@ def apply_discount():
     return "Applied discount of 11%"
 
 
-
-triage_agent = Agent(
-    name="Triage Agent",
-    instructions="Determine which agent is best suited to handle the user's request, and transfer the conversation to that agent.",
-    backlink=False
-)
 sales_agent = Agent(
     name="Sales Agent",
     instructions="Be super enthusiastic about selling bees.",
-    backlink=True
+    backlink=False
 )
 refunds_agent = Agent(
     name="Refunds Agent",
     instructions="Help the user with a refund. If the reason is that it was too expensive, offer the user a refund code. If they insist, then process the refund.",
-    backlink=True
-    # functions=[process_refund, apply_discount],
+    backlink=False,
+    functions=[process_refund, apply_discount],
+)
+
+triage_agent = Agent(
+    name="Triage Agent",
+    instructions="Determine which agent is best suited to handle the user's request, and transfer the conversation to that agent.",
+    backlink=True,
+    handoffs=[sales_agent, refunds_agent]
 )
 
 
-triage_agent.handoffs = [sales_agent, refunds_agent]
-refunds_agent.functions = [process_refund, apply_discount]
+# refunds_agent.functions = [process_refund, apply_discount]

@@ -66,7 +66,7 @@ def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|Non
     agent_map[agent.name] = (agent, lc_agent)
     
     for handoff in agent.handoffs:
-        create_swarm_agent_and_handoffs(llm, handoff, backlink_agent=agent if handoff.backlink else None, agent_map=agent_map)
+        create_swarm_agent_and_handoffs(llm, handoff, backlink_agent=agent if agent.backlink else None, agent_map=agent_map)
     
     return lc_agent
 

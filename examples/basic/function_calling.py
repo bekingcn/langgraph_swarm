@@ -1,5 +1,3 @@
-import sys
-sys.path.append("../../")
 import dotenv
 
 from langgraph_swarm import Swarm, Agent, tool

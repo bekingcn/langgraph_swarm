@@ -140,7 +140,8 @@ def _agent_response(response: str) -> str | None:
     return None
 
 # following swarm's implementation, pass the context variables to the tools if needed
-# any better way to do it?
+#   TODO: maybe there is any better way to do it?
+#   also, swarm removes the context variables from the model calls, and fills it back before tool calls
 def _try_fill_tool_calls(tool_calls: Sequence[ToolCall], state: AgentState) -> bool:
     changed = False
     for tool_call in tool_calls:
@@ -321,6 +322,9 @@ def _create_swarm_agent(
         for last_message in reversed(state["messages"]):
             if not isinstance(last_message, ToolMessage):
                 break
+            # TODO: handle tool response if context variables exist (swarm's implementation)
+            # following the swarm's implementation, update the context variables back to state's context variables
+            # add the context variables to ToolMessage.artifact? (tool.response_format=`content_and_artifact`)
             agent_name = _agent_response(last_message.content)
             if agent_name:
                 return {"next_agent": agent_name}

@@ -1,5 +1,3 @@
-import sys
-sys.path.append("../../")
 import dotenv
 from langgraph_swarm.repl import run_demo_loop
 from agents import triage_agent

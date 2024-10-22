@@ -1,8 +1,5 @@
-import sys
-sys.path.append("../../")
-import dotenv
-
 from langgraph_swarm import Swarm, Agent
+import dotenv
 dotenv.load_dotenv()
 
 agent = Agent(

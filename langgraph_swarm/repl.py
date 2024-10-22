@@ -43,11 +43,11 @@ def run_demo_loop(
         messages = resp["messages"] + [user_message]
         current_agent = resp["agent_name"]
         if stream:
-            for _chunk in wf.stream(input={"messages": messages, "agent_name": current_agent, "handoff": True}):
+            for _chunk in wf.stream(input={"messages": messages, "agent_name": current_agent, "handoff": True, "context_variables": context_variables}):
                 for _agent, _resp in _chunk.items():
                     if debug:
                         print(f"==> {_agent}: {_resp}")
                 resp = _resp
         else:
-            resp = wf.invoke(input={"messages": messages, "agent_name": current_agent, "handoff": True})
-        # pretty_print(resp["messages"])
+            resp = wf.invoke(input={"messages": messages, "agent_name": current_agent, "handoff": True, "context_variables": context_variables})
+        print(f"Final Response ({current_agent}):\n", resp.get("messages", [])[-1].content)

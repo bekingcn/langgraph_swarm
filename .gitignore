@@ -118,4 +118,5 @@ vector_data/
 chinook.db
 /*.png
 /*.json
+*.db
 # /notes/

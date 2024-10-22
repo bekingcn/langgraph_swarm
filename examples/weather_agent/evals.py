@@ -1,6 +1,3 @@
-import sys
-sys.path.append("../../")
-
 from langchain_core.messages import AIMessage
 from agents import weather_agent
 from langgraph_swarm import Swarm, Agent

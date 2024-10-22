@@ -1,10 +1,9 @@
-from swarm import Swarm
+from langgraph_swarm import Swarm, Agent
+from langchain_core.messages import AIMessage
 from agents import triage_agent, sales_agent, refunds_agent
 from evals_util import evaluate_with_llm_bool, BoolEvalResult
 import pytest
 import json
-
-client = Swarm()
 
 CONVERSATIONAL_EVAL_SYSTEM_PROMPT = """
 You will be provided with a conversation between a user and an agent, as well as a main goal for the conversation.
@@ -23,22 +22,25 @@ def conversation_was_successful(messages) -> bool:
     )
     return result.value
 
-
-def run_and_get_tool_calls(agent, query):
+def run_and_get_tool_calls(agent: Agent, query):
+    client = Swarm(agent)
     message = {"role": "user", "content": query}
     response = client.run(
         agent=agent,
         messages=[message],
-        execute_tools=False,
+        execute_tools=False,    # not supported well
     )
-    return response.messages[-1].get("tool_calls")
+    for m in reversed(response.messages):
+        if isinstance(m, AIMessage) and m.tool_calls:
+            return m.tool_calls
+    return []
 
 
 @pytest.mark.parametrize(
     "query,function_name",
     [
-        ("I want to make a refund!", "transfer_to_refunds"),
-        ("I want to talk to sales.", "transfer_to_sales"),
+        ("I want to make a refund!", "transfer_to_refunds_agent"),
+        ("I want to talk to sales.", "transfer_to_sales_agent"),
     ],
 )
 def test_triage_agent_calls_correct_function(query, function_name):
