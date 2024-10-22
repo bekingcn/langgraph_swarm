@@ -1,5 +1,3 @@
-![Swarm Logo](assets/logo.png)
-
 ## LangGraph Swarm
 
 The LangGraph Swarm is a alternative implementation to the OpenAI's [Swarm](https://github.com/openai/swarm) framework with [langchain](https://github.com/langchain-ai/langchain) and [langgraph](https://github.com/langchain-ai/langgraph).
