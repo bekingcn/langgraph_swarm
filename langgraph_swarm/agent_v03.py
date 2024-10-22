@@ -141,11 +141,15 @@ def _agent_response(response: str) -> str | None:
 
 # following swarm's implementation, pass the context variables to the tools if needed
 # any better way to do it?
-def _try_fill_tool_calls(tool_calls: Sequence[ToolCall], state: AgentState) -> None:
+def _try_fill_tool_calls(tool_calls: Sequence[ToolCall], state: AgentState) -> bool:
+    changed = False
     for tool_call in tool_calls:
         args = tool_call.get("args", {})
         if __CTX_VARS_NAME__ in args:
             args[__CTX_VARS_NAME__] = state.get("context_variables", {})
+            changed = True
+
+    return changed
 
 # NOTE: this is a refactoring of the langchain v0.3 create_react_agent function
 #       to support swarm agent.
