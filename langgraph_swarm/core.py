@@ -1,10 +1,12 @@
 from typing import Any, Callable, Dict, Generator, List, Literal, Tuple, Dict, Optional, Sequence, Type, TypedDict
 import re
+from functools import partial
+
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
 )
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.graph import CompiledGraph
@@ -16,13 +18,13 @@ from langgraph_swarm.util import add_agent_name_to_messages, create_default_llm,
 from .agent_v03 import _create_swarm_agent  , AGENT_RESPONSE_PREFIX
 from .types import Agent, Response
 
-def _generate_function_name(agent_name: str):
+def _generate_snake_case_name(agent_name: str):
     return re.sub(r"[^0-9a-z_]", "_", agent_name.lower())
 
 def create_swarm_handoff(agent: Agent | str, func_name: str|None = None):
     name = agent if isinstance(agent, str) else agent.name
     # refactoring name to be a function name
-    func_name = _generate_function_name(name)
+    func_name = func_name or _generate_snake_case_name(name)
     
     @tool
     def _agent_as_tool():
@@ -36,13 +38,14 @@ def create_swarm_handoff(agent: Agent | str, func_name: str|None = None):
 def create_swarm_backlink(agent: Agent | str, func_name: str|None = None):
     name = agent if isinstance(agent, str) else agent.name
     # refactoring name to be a function name
-    func_name = _generate_function_name(name)
+    func_name = func_name or _generate_snake_case_name(name)
     
     @tool
     def _agent_as_tool():
         """Call this function if a user is asking about a topic that is not handled by the current agent."""
         return f"{AGENT_RESPONSE_PREFIX}{name}"
 
+    # should add responsibility to backlink agent?
     _agent_as_tool.description = f"Call this function if a user is asking about a topic that is not handled by the current agent."
     _agent_as_tool.name = f"transfer_to_{func_name}"
     return _agent_as_tool
@@ -63,7 +66,18 @@ def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|Non
         debug=False
     )
     
-    agent_map[agent.name] = (agent, lc_agent)
+    # TODO: add support for multiple handoffs? which means it's a graph instead of hierarchy
+    #   1. There would be more than one backlink, it would be confused to current agent
+    #   2. There would be handoff circular references with bad cases (checking for cycles)
+    # For now, we raise an error if there are multiple handoffs. 
+    #   Does current implementation of workflow supports multiple handoffs (to be checked)?
+    if agent.name in agent_map:
+        raise ValueError(
+            f"Agent name {agent.name} already exists in agent_map"
+            f". We don't support an agent with multiple handoffs yet."
+        )
+    else:
+        agent_map[agent.name] = (agent, lc_agent)
     
     for handoff in agent.handoffs:
         create_swarm_agent_and_handoffs(llm, handoff, backlink_agent=agent if agent.backlink else None, agent_map=agent_map)
@@ -114,23 +128,35 @@ def create_swarm_workflow(
     
     workflow.add_node("entrypoint", start_node)
     workflow.set_entry_point("entrypoint")
-    branchs = {}
-    from functools import partial
+
+    # init branchs with an end node
+    branchs = {'end': END}
     for name, (agent, lc_agent) in agent_map.items():
-        # TODO: use a chain instead?
-        def call_agent_node(state: HandoffsState, agent_name: str, lc_agent):
+        # TODO: use a chain instead? so we draw full graph including `react` subgraphs
+        def call_agent_node(
+                state: HandoffsState, 
+                agent_name: str, 
+                lc_agent: CompiledGraph, 
+                config: RunnableConfig|None = None, 
+                **kwargs
+            ) -> HandoffsState:
+            # 1. pre_process
             if debug:
                 print("==> entering: ", agent_name)
             messages = state["messages"]
             init_len = len(messages)
+            # 2. subgraph call with modified state
             resp = lc_agent.invoke(
                 input={
                     "messages": state["messages"], 
                     "next_agent": None, 
                     "agent_name": agent_name, 
                     "context_variables": state.get("context_variables", {})
-                }
+                },
+                config=config,
+                **kwargs,       # pass kwargs through?
             )
+            # 3. post_process
             messages = resp["messages"]
             add_agent_name_to_messages(agent_name, messages[init_len:])
             if print_messages:
@@ -144,10 +170,11 @@ def create_swarm_workflow(
                 print("==> handoff to: ", next_agent)
             return {"messages": messages, "agent_name": next_agent if next_agent else state["agent_name"], "handoff": next_agent is not None}
         
-        workflow.add_node(agent.get_node_name(), partial(call_agent_node, agent_name=name, lc_agent=lc_agent))
-        workflow.add_edge(agent.get_node_name(), "entrypoint")
-        branchs[agent.name] = agent.get_node_name()
-    branchs["end"] = END     
+        node_name = _generate_snake_case_name(agent.name)
+        workflow.add_node(node_name, partial(call_agent_node, agent_name=name, lc_agent=lc_agent))
+        workflow.add_edge(node_name, "entrypoint")
+        branchs[agent.name] = node_name
+
     def handoff_or_end(state: HandoffsState):
         # if handoffs, then we call the next agent
         handoff = state.get("handoff", False)
@@ -223,25 +250,29 @@ class Swarm:
         agent_name = self.agent.name
         # TODO: use max_turns instead of Graph's recursion
         init_len = len(messages)
+        input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables}
         if stream:
             for _chunk in self.workflow.stream(
-                input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables},
+                input=input,
                 config={"recursion_limit": max_turns},
                 ):
                 for _agent, _resp in _chunk.items():
                     if self.debug:
-                        print(_agent, ": ", _resp)
+                        print(f"==> {_agent}: {_resp}")
                     # yield {_agent: _resp}
                 resp = _resp
         else:
             resp = self.workflow.invoke(
-                input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables},
+                input=input,
                 config={"recursion_limit": max_turns},
             )
         agent_name = resp["agent_name"]
         self.agent = self.get_agent(agent_name, False)
+        if self.print_messages:
+            self.print_messages(resp["messages"][init_len:])
         return Response(
             messages=resp["messages"][init_len:],
             agent=resp["agent_name"],
             context_variables={},
+            handoff=resp.get("handoff", False),
         )

@@ -1,30 +1,33 @@
 import os
 from typing import Literal
 from langchain_core.messages import HumanMessage
-from .core import create_swarm_workflow
+from .core import create_swarm_workflow, Swarm, HandoffsState
 from .types import Agent
 from .util import default_print_messages, create_default_llm, get_agent_name_from_message
 
 def run_demo_loop(
     starting_agent: Agent, 
     llm=None, 
-    context_variables=None, 
+    context_variables={}, 
     stream=False, 
     debug=False, 
     print_messages="default",
+    max_turns: int = 25,
     user_inputs=[],
 ) -> None:
     if print_messages == "default":
         print_messages = default_print_messages
     llm = llm or create_default_llm(starting_agent.model)
-    wf = create_swarm_workflow(
+    client = Swarm(
+        agent=starting_agent,
         llm=llm,
-        starting_agent=starting_agent,
-        print_messages=print_messages,
-        with_user_agent=False,
+        state_scheme=HandoffsState,
         debug=debug,
+        print_messages=print_messages,
     )
-    resp = {"messages": [], "agent_name": starting_agent.name, "handoff": True}
+    messages = []
+    current_agent = starting_agent.name
+    handoff = True
     user_inputs_index = 0
     while True:
         if user_inputs:
@@ -40,14 +43,18 @@ def run_demo_loop(
         user_message = HumanMessage(content=user_input, name="User")
         if print_messages:
             print_messages([user_message])
-        messages = resp["messages"] + [user_message]
-        current_agent = resp["agent_name"]
+        messages.append(user_message)
+        resp = client.run(
+            messages=messages,
+            context_variables=context_variables,
+            stream=stream,
+            max_turns=max_turns,
+        )
         if stream:
-            for _chunk in wf.stream(input={"messages": messages, "agent_name": current_agent, "handoff": True, "context_variables": context_variables}):
-                for _agent, _resp in _chunk.items():
-                    if debug:
-                        print(f"==> {_agent}: {_resp}")
-                resp = _resp
-        else:
-            resp = wf.invoke(input={"messages": messages, "agent_name": current_agent, "handoff": True, "context_variables": context_variables})
-        print(f"Final Response ({current_agent}):\n", resp.get("messages", [])[-1].content)
+            # TODO: handle streaming responses
+            resp = resp
+        messages.extend(resp.messages)
+        current_agent = resp.agent
+        context_variables = resp.context_variables
+        handoff = resp.handoff  # for next turn, handoff always is true
+        print(f"Final Response ({current_agent}):\n", messages[-1].content)

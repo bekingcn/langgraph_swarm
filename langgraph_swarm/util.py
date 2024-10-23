@@ -33,7 +33,7 @@ def default_print_messages(messages, debug: bool = True):
         return
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for message in messages:
-        agent_name = get_agent_name_from_message(messages[0]) or "User"
+        agent_name = get_agent_name_from_message(message) or "User"
         print(f"\033[97m[\033[90m{timestamp}\033[97m]\033[90m {agent_name}[{message.type}]: {message}\033[0m")
 
 def create_default_llm(model_name=None):

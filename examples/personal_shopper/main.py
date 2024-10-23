@@ -26,6 +26,7 @@ def refund_item(user_id, item_id):
     else:
         print(f"No purchase found for user ID {user_id} and item ID {item_id}.")
     print("Refund initiated")
+    return "Success!" if result else "Failed"
 
 @tool
 def notify_customer(user_id, method):
@@ -57,6 +58,7 @@ def notify_customer(user_id, method):
             print(f"No {method} contact available for user ID {user_id}.")
     else:
         print(f"User ID {user_id} not found.")
+    return "Success!" if user else "Failed"
 
 @tool
 def order_item(user_id, product_id):
@@ -89,6 +91,8 @@ def order_item(user_id, product_id):
         database.add_purchase(user_id, date_of_purchase, item_id, price)
     else:
         print(f"Product {product_id} not found.")
+
+    return "Success!" if result else "Failed"
 
 
 # Initialize the database
@@ -139,4 +143,4 @@ for f in triage_agent.functions:
 
 if __name__ == "__main__":
     # Run the demo loop
-    run_demo_loop(triage_agent, debug=False)
+    run_demo_loop(triage_agent, debug=True)

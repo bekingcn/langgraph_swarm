@@ -15,11 +15,9 @@ class Agent(BaseModel):
     functions: List[BaseTool] = []
     tool_choice: str = None
     parallel_tool_calls: bool = True
-    
-    def get_node_name(self):
-        return self.name.replace(" ", "_").lower()
 
 class Response(BaseModel):
     messages: List[BaseMessage] = []
     agent: Optional[str] = None
     context_variables: dict = {}
+    handoff: bool = False

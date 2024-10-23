@@ -24,3 +24,9 @@ Check out `/examples` for inspiration! Learn more about each one in its README.
 - [`personal_shopper`](examples/personal_shopper): A personal shopping agent that can help with making sales and refunding orders
 - TODO: [`airline`](examples/airline): A multi-agent setup for handling different customer service requests in an airline context.
 - TODO: [`support_bot`](examples/support_bot): A customer service bot which includes a user interface agent and a help center agent with several tools
+
+## Open issues
+
+If you have any questions or feedback, please open an issue on [github](https://github.com/bekingcn/langgraph_swarm)
+
+Or you can reach me on [email](mailto:beking_cn@hotmail.com)
