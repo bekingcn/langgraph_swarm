@@ -8,6 +8,8 @@ from typing import (
     TypedDict,
     TypeVar,
     Union,
+    Dict,
+    Any,
 )
 
 from langchain_core.language_models import BaseChatModel
@@ -24,7 +26,6 @@ from langgraph.prebuilt.tool_executor import ToolExecutor
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.types import Checkpointer
 
-from typing import Dict, Any
 from langchain_core.messages import ToolMessage
 
 
@@ -38,9 +39,7 @@ class AgentState(TypedDict):
     agent_name: str
     # the handoff agent from current agent
     next_agent: Optional[str] = None
-    # swarm style variables holder, not supported
-    # maybe it would be merged with the State in langgraph, need to declare the variables
-    # it's used to parse the instructions
+    # swarm style variables holder
     context_variables: Dict[str, Any] = {}
 
     is_last_step: IsLastStep
@@ -151,6 +150,9 @@ def _try_fill_tool_calls(tool_calls: Sequence[ToolCall], state: AgentState) -> b
             changed = True
 
     return changed
+
+def _update_context_variables(original_vars: Dict[str, Any], new_vars: Dict[str, Any]) -> Dict[str, Any]:
+    return {**original_vars, **new_vars}
 
 # NOTE: this is a refactoring of the langchain v0.3 create_react_agent function
 #       to support swarm agent.
@@ -314,27 +316,30 @@ def _create_swarm_agent(
     )
 
     # swarm added    
-    def check_tool_result(state: AgentState):
-        # TODO: this is a trick to check and get agent name to handoff
-        #   otherwise, we have to rewrite the tools executor to handle agent's responses
-        # if mutliple tools, we should find the latest one with handoff agent 
-        #   following the swarm's implementation
+    def check_tools_result(state: AgentState):
+        context_vars = state.get("context_variables", {})
         for last_message in reversed(state["messages"]):
             if not isinstance(last_message, ToolMessage):
                 break
-            # TODO: handle tool response if context variables exist (swarm's implementation)
-            # following the swarm's implementation, update the context variables back to state's context variables
-            # add the context variables to ToolMessage.artifact? (tool.response_format=`content_and_artifact`)
+            # TODO: to be checked. handle tool response if context variables exist (swarm's implementation)
+            # following the swarm's implementation, update the context variables back to state's context_variables
+            # add the context variables into ToolMessage.artifact (tool.response_format=`content_and_artifact`)
+            context_vars = state.get("context_variables", {})
+            if last_message.artifact and isinstance(last_message.artifact, dict) and __CTX_VARS_NAME__ in last_message.artifact:
+                context_vars = _update_context_variables(context_vars, last_message.artifact[__CTX_VARS_NAME__])
+                
+            # NOTE: for now, this is a trick to identify handoff's name
+            # if mutliple tools, we should find the latest one which has `next_agent` following the swarm's implementation
             agent_name = _agent_response(last_message.content)
             if agent_name:
-                return {"next_agent": agent_name}
+                return {"next_agent": agent_name, "context_variables": context_vars}
             if last_message.name in should_return_direct:
                 # should handle `__end__` in the core.py
-                return {"next_agent": "__end__"}
-        else:
-            return {"next_agent": None}
+                return {"next_agent": "__end__", "context_variables": context_vars}
+        return {"next_agent": None, "context_variables": context_vars}
+
     # We now add a normal edge from `tools` to `post_tools` for checking tools response.
-    workflow.add_node("post_tools", check_tool_result)
+    workflow.add_node("post_tools", check_tools_result)
     workflow.add_edge("tools", "post_tools")
 
     # swarm modified

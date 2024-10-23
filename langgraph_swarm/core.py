@@ -15,7 +15,7 @@ from langchain_core.tools import tool
 
 from langgraph_swarm.util import add_agent_name_to_messages, create_default_llm, default_print_messages
 
-from .agent_v03 import _create_swarm_agent  , AGENT_RESPONSE_PREFIX
+from .agent_v03 import _create_swarm_agent, AGENT_RESPONSE_PREFIX, __CTX_VARS_NAME__
 from .types import Agent, Response
 
 def _generate_snake_case_name(agent_name: str):
@@ -50,6 +50,11 @@ def create_swarm_backlink(agent: Agent | str, func_name: str|None = None):
     _agent_as_tool.name = f"transfer_to_{func_name}"
     return _agent_as_tool
 
+def _merge_context_variables(state: dict) -> dict:
+    new_state = state.copy()
+    context_variables = new_state.pop("context_variables", {})
+    return {**new_state, **context_variables}
+
 def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|None = None, agent_map={}):
     
     tools = agent.functions.copy()
@@ -58,23 +63,31 @@ def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|Non
         tools.append(create_swarm_handoff(handoff))
     if backlink_agent:
         tools.append(create_swarm_backlink(backlink_agent))
+    
+    instructions = agent.instructions
+    if isinstance(instructions, Runnable):
+        # TODO: make it better?
+        # runnable cannot see context_variables, so we need to merge them into state
+        # or: only state.messages + **context_variables
+        instructions = _merge_context_variables | instructions
     lc_agent = _create_swarm_agent(
         model=llm,
         tools=tools,
         agent_name=agent.name,
-        state_modifier=agent.instructions,
+        state_modifier=instructions,
         debug=False
     )
     
-    # TODO: add support for multiple handoffs? which means it's a graph instead of hierarchy
+    # TODO: add support handoffs from multiple agents? which means it's a graph instead of hierarchy
     #   1. There would be more than one backlink, it would be confused to current agent
+    #      due to langgraph not supporting dynamic tools (likely we can set available tools dynamically from prompts)
     #   2. There would be handoff circular references with bad cases (checking for cycles)
-    # For now, we raise an error if there are multiple handoffs. 
-    #   Does current implementation of workflow supports multiple handoffs (to be checked)?
+    # For now, we raise an error if there are handoffs from multiple agents, 
+    #   maybe it works to allow a graph (but not fully tested yet)?
     if agent.name in agent_map:
         raise ValueError(
             f"Agent name {agent.name} already exists in agent_map"
-            f". We don't support an agent with multiple handoffs yet."
+            f". We don't support an agent being linked to multiple handoffs yet."
         )
     else:
         agent_map[agent.name] = (agent, lc_agent)
@@ -105,10 +118,12 @@ def create_swarm_workflow(
     interrupt_after: Optional[Sequence[str]] = None,
     debug: bool = False,
     # hold all created agents with name and lc_agent
-    agent_map: Dict[str, Tuple[Agent, CompiledGraph]] = {}
+    agent_map: Dict[str, Tuple[Agent, CompiledGraph]] | None = None
 ) -> CompiledGraph:
     
     agent = starting_agent
+    if agent_map is None:
+        agent_map = {}
     
     create_swarm_agent_and_handoffs(llm, agent, backlink_agent=None, agent_map=agent_map)
     
@@ -126,13 +141,48 @@ def create_swarm_workflow(
     
     start_node = human_agent_node if with_user_agent else nop_agent_node
     
-    workflow.add_node("entrypoint", start_node)
-    workflow.set_entry_point("entrypoint")
+    workflow.add_node("agent_router", start_node)
+    workflow.set_entry_point("agent_router")
 
     # init branchs with an end node
     branchs = {'end': END}
     for name, (agent, lc_agent) in agent_map.items():
         # TODO: use a chain instead? so we draw full graph including `react` subgraphs
+        def _pre_process(state: HandoffsState, agent_name: str):
+            return {"messages": state["messages"], 
+                    "next_agent": None, 
+                    "agent_name": agent_name, 
+                    __CTX_VARS_NAME__: state.get(__CTX_VARS_NAME__, {})
+                }
+        
+        def _post_process(state: HandoffsState, agent_name: str):
+            messages = state["messages"]
+            this_turn_messages = []
+            # check the messages in this turn
+            for _msg in reversed(messages):
+                if isinstance(_msg, HumanMessage) or "agent_name" in _msg.additional_kwargs:
+                    pass
+                else:
+                    this_turn_messages.append(_msg)
+            this_turn_messages.reverse()
+            add_agent_name_to_messages(agent_name, this_turn_messages)
+            if print_messages:
+                print_messages(this_turn_messages)
+            next_agent = state.get("next_agent", None)
+            if next_agent in ["__end__"]:
+                # post_process here to handle `__end__` from `react_agent`
+                next_agent = None
+            if debug and next_agent:
+                print("==> handoff to: ", next_agent)
+            return {
+                "messages": messages, 
+                "agent_name": next_agent if next_agent else state["agent_name"], 
+                "handoff": next_agent is not None, 
+                __CTX_VARS_NAME__: state.get(__CTX_VARS_NAME__, {})
+            }
+        chain = partial(_pre_process, agent_name=agent.name) | lc_agent | partial(_post_process, agent_name=agent.name)
+
+        # TODO: remove this after `chain` fully tested
         def call_agent_node(
                 state: HandoffsState, 
                 agent_name: str, 
@@ -151,7 +201,7 @@ def create_swarm_workflow(
                     "messages": state["messages"], 
                     "next_agent": None, 
                     "agent_name": agent_name, 
-                    "context_variables": state.get("context_variables", {})
+                    __CTX_VARS_NAME__: state.get(__CTX_VARS_NAME__, {})
                 },
                 config=config,
                 **kwargs,       # pass kwargs through?
@@ -168,11 +218,17 @@ def create_swarm_workflow(
                 next_agent = None
             if debug and next_agent:
                 print("==> handoff to: ", next_agent)
-            return {"messages": messages, "agent_name": next_agent if next_agent else state["agent_name"], "handoff": next_agent is not None}
+            return {
+                "messages": messages, 
+                "agent_name": next_agent if next_agent else state["agent_name"], 
+                "handoff": next_agent is not None, 
+                __CTX_VARS_NAME__: resp.get(__CTX_VARS_NAME__, {})
+            }
         
         node_name = _generate_snake_case_name(agent.name)
-        workflow.add_node(node_name, partial(call_agent_node, agent_name=name, lc_agent=lc_agent))
-        workflow.add_edge(node_name, "entrypoint")
+        # workflow.add_node(node_name, partial(call_agent_node, agent_name=name, lc_agent=lc_agent))
+        workflow.add_node(node_name, chain)
+        workflow.add_edge(node_name, "agent_router")
         branchs[agent.name] = node_name
 
     def handoff_or_end(state: HandoffsState):
@@ -189,7 +245,7 @@ def create_swarm_workflow(
             return "end"
         
     workflow.add_conditional_edges(
-        "entrypoint",
+        "agent_router",
         handoff_or_end,
         branchs,
     )
@@ -258,7 +314,7 @@ class Swarm:
         yield Response(
             messages=resp["messages"][init_len:],
             agent=resp["agent_name"],
-            context_variables={},
+            context_variables=resp.get(__CTX_VARS_NAME__, {}),
             handoff=resp.get("handoff", False),
         )
     
@@ -282,7 +338,7 @@ class Swarm:
         agent_name = self.agent.name
         # TODO: use max_turns instead of Graph's recursion
         init_len = len(messages)
-        input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables}
+        input={"messages": messages, "agent_name": agent_name, "handoff": True, __CTX_VARS_NAME__: context_variables}
         if stream:
             return self.run_stream(input, max_turns)
         else:
@@ -297,6 +353,6 @@ class Swarm:
             return Response(
                 messages=resp["messages"][init_len:],
                 agent=resp["agent_name"],
-                context_variables={},
+                context_variables=resp.get(__CTX_VARS_NAME__, {}),
                 handoff=resp.get("handoff", False),
             )
