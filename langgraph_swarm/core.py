@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Generator, List, Literal, Tuple, Dict, Optional, Sequence, Type, TypedDict
+from typing import Any, Callable, Dict, Generator, Iterator, List, Literal, Tuple, Dict, Optional, Sequence, Type, TypedDict
 import re
 from functools import partial
 
@@ -230,6 +230,38 @@ class Swarm:
             raise ValueError(f"Agent {name} not found")
         return None
     
+    def run_stream(self, input: dict, max_turns: int):
+        init_len = len(input["messages"])
+        for _chunk in self.workflow.stream(
+            input=input,
+            config={"recursion_limit": max_turns},
+            debug=self.debug,
+            subgraphs=self.debug,
+            ):
+            if isinstance(_chunk, Dict):
+                for _agent, _resp in _chunk.items():
+                    yield {_agent: _resp}
+                resp = _resp
+            # TODO: parse chunk when workflow debug is enabled and subgraphs is True
+            elif isinstance(_chunk, Tuple):
+                for _item in _chunk:
+                    if isinstance(_item, Dict):
+                        for _agent, _resp in _item.items():
+                            yield {_agent: _resp}
+                        resp = _resp
+                    else:
+                        yield _item
+        agent_name = resp["agent_name"]
+        self.agent = self.get_agent(agent_name, False)
+        if self.print_messages:
+            self.print_messages(resp["messages"][init_len:])
+        yield Response(
+            messages=resp["messages"][init_len:],
+            agent=resp["agent_name"],
+            context_variables={},
+            handoff=resp.get("handoff", False),
+        )
+    
     # for now, trying to be compatible with OpenAI Swarm
     def run(
         self,
@@ -252,27 +284,19 @@ class Swarm:
         init_len = len(messages)
         input={"messages": messages, "agent_name": agent_name, "handoff": True, "context_variables": context_variables}
         if stream:
-            for _chunk in self.workflow.stream(
-                input=input,
-                config={"recursion_limit": max_turns},
-                ):
-                for _agent, _resp in _chunk.items():
-                    if self.debug:
-                        print(f"==> {_agent}: {_resp}")
-                    # yield {_agent: _resp}
-                resp = _resp
+            return self.run_stream(input, max_turns)
         else:
             resp = self.workflow.invoke(
                 input=input,
                 config={"recursion_limit": max_turns},
             )
-        agent_name = resp["agent_name"]
-        self.agent = self.get_agent(agent_name, False)
-        if self.print_messages:
-            self.print_messages(resp["messages"][init_len:])
-        return Response(
-            messages=resp["messages"][init_len:],
-            agent=resp["agent_name"],
-            context_variables={},
-            handoff=resp.get("handoff", False),
-        )
+            agent_name = resp["agent_name"]
+            self.agent = self.get_agent(agent_name, False)
+            if self.print_messages:
+                self.print_messages(resp["messages"][init_len:])
+            return Response(
+                messages=resp["messages"][init_len:],
+                agent=resp["agent_name"],
+                context_variables={},
+                handoff=resp.get("handoff", False),
+            )
