@@ -219,33 +219,40 @@ def create_swarm_workflow(
             # from `react` AgentState
             messages = state["messages"]
             this_turn_messages = []
-            next_agent = None
-            context_vars = state.get(__CTX_VARS_NAME__, {})
             # check the messages in this turn
             for _msg in reversed(messages):
-                if isinstance(_msg, (ToolMessage, AIMessage)) and "agent_name" not in _msg.additional_kwargs:
-                    this_turn_messages.append(_msg)
                 if isinstance(_msg, AIMessage):
                     _msg.name = agent_name
-                if isinstance(_msg, ToolMessage):
-                    if _msg.name in tools_to_handoffs:
-                        # use the latest agent as the next agent
-                        next_agent = next_agent or tools_to_handoffs[_msg.name]
-                    # TODO: to be checked. handle tool response if context variables exist (swarm's implementation)
-                    # following the swarm's implementation, update the context variables back to state's context_variables
-                    # add the context variables into ToolMessage.artifact (tool.response_format=`content_and_artifact`)
-                    if _msg.artifact and isinstance(_msg.artifact, dict) and __CTX_VARS_NAME__ in _msg.artifact:
-                        context_vars = _update_context_variables(context_vars, _msg.artifact[__CTX_VARS_NAME__])
+                if isinstance(_msg, (ToolMessage, AIMessage)) and "agent_name" not in _msg.additional_kwargs:
+                    this_turn_messages.append(_msg)
+                else:
+                    break
 
             this_turn_messages.reverse()
             add_agent_name_to_messages(agent_name, this_turn_messages)
             if print_messages:
                 print_messages(this_turn_messages)
+
+            next_agent = None
+            context_vars = state.get(__CTX_VARS_NAME__, {})
+            # check the tool messages only in this turn
+            for _msg in reversed(messages):
+                if isinstance(_msg, ToolMessage):
+                    if not next_agent and _msg.name in tools_to_handoffs:
+                        # use the latest agent as the next agent
+                        next_agent = tools_to_handoffs[_msg.name]
+                    # TODO: to be checked. handle tool response if context variables exist (swarm's implementation)
+                    # following the swarm's implementation, update the context variables back to state's context_variables
+                    # add the context variables into ToolMessage.artifact (tool.response_format=`content_and_artifact`)
+                    if _msg.artifact and isinstance(_msg.artifact, dict) and __CTX_VARS_NAME__ in _msg.artifact:
+                        context_vars = _update_context_variables(context_vars, _msg.artifact[__CTX_VARS_NAME__])
+                else:
+                    break
             # next_agent = state.get("next_agent", None)
             # if next_agent in ["__end__"]:
                 # post_process here to handle `__end__` from `react_agent`
             #     next_agent = None
-            if debug and next_agent:
+            if next_agent:  # TODO: add debug
                 print("==> handoff to: ", next_agent)
             return {
                 "messages": messages, 
@@ -255,7 +262,7 @@ def create_swarm_workflow(
             }
         
         # chained functions with lc_agent
-        chain = partial(_pre_process, agent_name=agent.name) | lc_agent | partial(_post_process, agent_name=agent.name, tools_to_handoffs=tools_to_handoffs)
+        chain = partial(_pre_process, agent_name=agent.name) | lc_agent | partial(_post_process, agent_name=agent.name, tools_to_handoffs=tools_to_handoffs.copy())
         
         node_name = _generate_snake_case_name(agent.name)
         # workflow.add_node(node_name, partial(call_agent_node, agent_name=name, lc_agent=lc_agent))

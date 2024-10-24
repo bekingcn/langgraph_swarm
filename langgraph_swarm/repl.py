@@ -1,7 +1,7 @@
 import os
 from typing import Literal
 from langchain_core.messages import HumanMessage
-from .core import create_swarm_workflow, Swarm, HandoffsState
+from .router import create_swarm_workflow, Swarm, HandoffsState
 from .types import Agent, Response
 from .util import default_print_messages, create_default_llm, get_agent_name_from_message
 
