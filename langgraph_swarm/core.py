@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, Generator, Iterator, List, Literal, Tuple, Dict, Optional, Sequence, Type, TypedDict
+from typing import Annotated, Any, Callable, Dict, Generator, Iterator, List, Literal, Tuple, Dict, Optional, Sequence, Type, TypedDict
 import re
 from functools import partial
 
@@ -10,45 +10,49 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.graph import CompiledGraph
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
 
 from langgraph_swarm.util import add_agent_name_to_messages, create_default_llm, default_print_messages
 
-from .agent_v03 import _create_swarm_agent, AGENT_RESPONSE_PREFIX, __CTX_VARS_NAME__
+from .agent_v03 import _create_swarm_agent, __CTX_VARS_NAME__
 from .types import Agent, Response
+
+# TODO: make this user configurable from `create_handoff`, 
+#   and resolve the agent name even it is a f-string
+AGENT_RESPONSE_PREFIX = "transferred to "
 
 def _generate_snake_case_name(agent_name: str):
     return re.sub(r"[^0-9a-z_]", "_", agent_name.lower())
 
-def create_swarm_handoff(agent: Agent | str, func_name: str|None = None):
+def create_swarm_agent_as_tool(
+        agent: Agent | str, 
+        func_name: str, 
+        description: str,
+        return_direct: bool = False,
+        injected_state: bool = False
+    ):
     name = agent if isinstance(agent, str) else agent.name
-    # refactoring name to be a function name
-    func_name = func_name or _generate_snake_case_name(name)
     
-    @tool
+    @tool(name=func_name, return_direct=return_direct)
     def _agent_as_tool():
-        """Call this function if a user is asking about a topic that should be handled by {name}."""
         return f"{AGENT_RESPONSE_PREFIX}{name}"
-
-    _agent_as_tool.description = f"Call this function if a user is asking about a topic that should be handled by {name}."
-    _agent_as_tool.name = f"transfer_to_{func_name}"
+    _agent_as_tool.description = description
     return _agent_as_tool
 
-def create_swarm_backlink(agent: Agent | str, func_name: str|None = None):
+def create_swarm_handoff(agent: Agent | str, func_name: str|None = None, description: str|None = None):
     name = agent if isinstance(agent, str) else agent.name
     # refactoring name to be a function name
-    func_name = func_name or _generate_snake_case_name(name)
-    
-    @tool
-    def _agent_as_tool():
-        """Call this function if a user is asking about a topic that is not handled by the current agent."""
-        return f"{AGENT_RESPONSE_PREFIX}{name}"
+    func_name = func_name or f"transfer_to_{_generate_snake_case_name(name)}"
+    description = description or f"Call this function if a user is asking about a topic that should be handled by {name}."
+    return create_swarm_agent_as_tool(agent, func_name, description)
 
-    # should add responsibility to backlink agent?
-    _agent_as_tool.description = f"Call this function if a user is asking about a topic that is not handled by the current agent."
-    _agent_as_tool.name = f"transfer_to_{func_name}"
-    return _agent_as_tool
+def create_swarm_backlink(agent: Agent | str, func_name: str|None = None, description: str|None = None):
+    name = agent if isinstance(agent, str) else agent.name
+    # refactoring name to be a function name
+    func_name = func_name or f"transfer_to_{_generate_snake_case_name(name)}"
+    description = description or f"Call this function if a user is asking about a topic that is not handled by the current agent."
+    return create_swarm_agent_as_tool(agent, func_name, description, return_direct=True)
 
 def _merge_context_variables(state: dict) -> dict:
     new_state = state.copy()
@@ -59,10 +63,15 @@ def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|Non
     
     tools = agent.functions.copy()
     # process handoffs
+    tools_to_handoffs: Dict[str, str] = {}
     for handoff in agent.handoffs:
-        tools.append(create_swarm_handoff(handoff))
+        func_name = f"transfer_to_{_generate_snake_case_name(handoff.name)}"
+        tools.append(create_swarm_handoff(handoff, func_name=func_name))
+        tools_to_handoffs[func_name] = handoff.name
     if backlink_agent:
-        tools.append(create_swarm_backlink(backlink_agent))
+        func_name = f"transfer_to_{_generate_snake_case_name(backlink_agent.name)}"
+        tools.append(create_swarm_backlink(backlink_agent, func_name=func_name))
+        tools_to_handoffs[func_name] = backlink_agent.name
     
     instructions = agent.instructions
     if isinstance(instructions, Runnable):
@@ -74,6 +83,7 @@ def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|Non
         model=llm,
         tools=tools,
         agent_name=agent.name,
+        handoff_map=tools_to_handoffs,
         state_modifier=instructions,
         debug=False
     )
@@ -134,7 +144,7 @@ def create_swarm_workflow(
         user_input = input("User: ")
         if user_input.strip() == "/end":
             return {"user_end": True}
-        return {"messages": [HumanMessage(content=user_input)]}
+        return {"messages": state.get("messages", []) + [HumanMessage(content=user_input)]}
 
     def nop_agent_node(state: HandoffsState):
         return state
@@ -147,8 +157,15 @@ def create_swarm_workflow(
     # init branchs with an end node
     branchs = {'end': END}
     for name, (agent, lc_agent) in agent_map.items():
-        # TODO: use a chain instead? so we draw full graph including `react` subgraphs
         def _pre_process(state: HandoffsState, agent_name: str):
+            # mark the messages before this turn if not from an agent
+            messages = state["messages"]
+            unknown_messages = []
+            # check the messages in this turn
+            for _msg in reversed(messages):
+                if isinstance(_msg, BaseMessage) and "agent_name" not in _msg.additional_kwargs:
+                    unknown_messages.append(_msg)
+            add_agent_name_to_messages("__user__", unknown_messages)
             return {"messages": state["messages"], 
                     "next_agent": None, 
                     "agent_name": agent_name, 
@@ -160,9 +177,7 @@ def create_swarm_workflow(
             this_turn_messages = []
             # check the messages in this turn
             for _msg in reversed(messages):
-                if isinstance(_msg, HumanMessage) or "agent_name" in _msg.additional_kwargs:
-                    pass
-                else:
+                if isinstance(_msg, (ToolMessage, AIMessage)) and "agent_name" not in _msg.additional_kwargs:
                     this_turn_messages.append(_msg)
             this_turn_messages.reverse()
             add_agent_name_to_messages(agent_name, this_turn_messages)
@@ -181,49 +196,6 @@ def create_swarm_workflow(
                 __CTX_VARS_NAME__: state.get(__CTX_VARS_NAME__, {})
             }
         chain = partial(_pre_process, agent_name=agent.name) | lc_agent | partial(_post_process, agent_name=agent.name)
-
-        # TODO: remove this after `chain` fully tested
-        def call_agent_node(
-                state: HandoffsState, 
-                agent_name: str, 
-                lc_agent: CompiledGraph, 
-                config: RunnableConfig|None = None, 
-                **kwargs
-            ) -> HandoffsState:
-            # 1. pre_process
-            if debug:
-                print("==> entering: ", agent_name)
-            messages = state["messages"]
-            init_len = len(messages)
-            # 2. subgraph call with modified state
-            resp = lc_agent.invoke(
-                input={
-                    "messages": state["messages"], 
-                    "next_agent": None, 
-                    "agent_name": agent_name, 
-                    __CTX_VARS_NAME__: state.get(__CTX_VARS_NAME__, {})
-                },
-                config=config,
-                **kwargs,       # pass kwargs through?
-            )
-            # 3. post_process
-            messages = resp["messages"]
-            add_agent_name_to_messages(agent_name, messages[init_len:])
-            if print_messages:
-                print_messages(messages[init_len:])
-            # if None, reponse only, otherwise next agent
-            next_agent = resp.get("next_agent", None)
-            if next_agent in ["__end__"]:
-                # post_process here to handle `__end__` from `react_agent`
-                next_agent = None
-            if debug and next_agent:
-                print("==> handoff to: ", next_agent)
-            return {
-                "messages": messages, 
-                "agent_name": next_agent if next_agent else state["agent_name"], 
-                "handoff": next_agent is not None, 
-                __CTX_VARS_NAME__: resp.get(__CTX_VARS_NAME__, {})
-            }
         
         node_name = _generate_snake_case_name(agent.name)
         # workflow.add_node(node_name, partial(call_agent_node, agent_name=name, lc_agent=lc_agent))

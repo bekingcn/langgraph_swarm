@@ -120,3 +120,4 @@ chinook.db
 /*.json
 *.db
 # /notes/
+notes/lg.ipynb

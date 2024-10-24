@@ -30,7 +30,6 @@ from langchain_core.messages import ToolMessage
 
 
 __CTX_VARS_NAME__ = "context_variables"
-AGENT_RESPONSE_PREFIX = "transfer to "
 
 class AgentState(TypedDict):
     """The state of the agent."""
@@ -130,14 +129,6 @@ def _get_model_preprocessing_runnable(
 
     return _get_state_modifier_runnable(state_modifier)
 
-
-AGENT_RESPONSE_PREFIX = "transfer to "
-
-def _agent_response(response: str) -> str | None:
-    if response.startswith(AGENT_RESPONSE_PREFIX):
-        return response[len(AGENT_RESPONSE_PREFIX):]
-    return None
-
 # following swarm's implementation, pass the context variables to the tools if needed
 #   TODO: maybe there is any better way to do it?
 #   also, swarm removes the context variables from the model calls, and fills it back before tool calls
@@ -160,8 +151,9 @@ def _update_context_variables(original_vars: Dict[str, Any], new_vars: Dict[str,
 def _create_swarm_agent(
     model: BaseChatModel,
     tools: Union[ToolExecutor, Sequence[BaseTool], ToolNode],
+    agent_name: str,
+    handoff_map: Dict[str, str] = {},
     *,
-    agent_name: str = None,
     state_schema: Optional[StateSchemaType] = None,
     messages_modifier: Optional[MessagesModifier] = None,
     state_modifier: Optional[StateModifier] = None,
@@ -315,6 +307,7 @@ def _create_swarm_agent(
         should_continue,
     )
 
+    _handoff_map = handoff_map.copy()
     # swarm added    
     def check_tools_result(state: AgentState):
         context_vars = state.get("context_variables", {})
@@ -329,8 +322,9 @@ def _create_swarm_agent(
                 context_vars = _update_context_variables(context_vars, last_message.artifact[__CTX_VARS_NAME__])
                 
             # NOTE: for now, this is a trick to identify handoff's name
+            #   another way is to identify it from tool name, and pass the map from tool name to agent name
             # if mutliple tools, we should find the latest one which has `next_agent` following the swarm's implementation
-            agent_name = _agent_response(last_message.content)
+            agent_name = _handoff_map.get(last_message.name, None)
             if agent_name:
                 return {"next_agent": agent_name, "context_variables": context_vars}
             if last_message.name in should_return_direct:
