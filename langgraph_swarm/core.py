@@ -34,7 +34,7 @@ def create_swarm_agent_as_tool(
     ):
     name = agent if isinstance(agent, str) else agent.name
     
-    @tool(name=func_name, return_direct=return_direct)
+    @tool(func_name, return_direct=return_direct)
     def _agent_as_tool():
         """{description}"""
         return f"{AGENT_RESPONSE_PREFIX}{name}"
@@ -53,7 +53,7 @@ def create_swarm_backlink(agent: Agent | str, func_name: str|None = None, descri
     # refactoring name to be a function name
     func_name = func_name or f"transfer_to_{_generate_snake_case_name(name)}"
     description = description or f"Call this function if a user is asking about a topic that is not handled by the current agent."
-    return create_swarm_agent_as_tool(agent, func_name, description, return_direct=True)
+    return create_swarm_agent_as_tool(agent, func_name, description)
 
 def _merge_context_variables(state: dict) -> dict:
     new_state = state.copy()
@@ -101,7 +101,7 @@ def create_swarm_agent_and_handoffs(llm, agent: Agent, backlink_agent: Agent|Non
             f". We don't support an agent being linked to multiple handoffs yet."
         )
     else:
-        agent_map[agent.name] = (agent, lc_agent)
+        agent_map[agent.name] = (agent, lc_agent, tools_to_handoffs)
     
     for handoff in agent.handoffs:
         create_swarm_agent_and_handoffs(llm, handoff, backlink_agent=agent if agent.backlink else None, agent_map=agent_map)
@@ -129,7 +129,7 @@ def create_swarm_workflow(
     interrupt_after: Optional[Sequence[str]] = None,
     debug: bool = False,
     # hold all created agents with name and lc_agent
-    agent_map: Dict[str, Tuple[Agent, CompiledGraph]] | None = None
+    agent_map: Dict[str, Tuple[Agent, CompiledGraph, Dict[str, str]]] | None = None
 ) -> CompiledGraph:
     
     agent = starting_agent
@@ -157,7 +157,7 @@ def create_swarm_workflow(
 
     # init branchs with an end node
     branchs = {'end': END}
-    for name, (agent, lc_agent) in agent_map.items():
+    for name, (agent, lc_agent, _) in agent_map.items():
         def _pre_process(state: HandoffsState, agent_name: str):
             # mark the messages before this turn if not from an agent
             messages = state["messages"]
@@ -166,6 +166,8 @@ def create_swarm_workflow(
             for _msg in reversed(messages):
                 if isinstance(_msg, BaseMessage) and "agent_name" not in _msg.additional_kwargs:
                     unknown_messages.append(_msg)
+                else:
+                    break
             add_agent_name_to_messages("__user__", unknown_messages)
             return {"messages": state["messages"], 
                     "next_agent": None, 
