@@ -15,7 +15,7 @@ from langchain_core.tools import tool
 
 from langgraph_swarm.util import add_agent_name_to_messages, create_default_llm, default_print_messages
 
-from .agent_v03 import _create_swarm_agent, __CTX_VARS_NAME__
+from .agent_v03 import AgentState, _create_swarm_agent, __CTX_VARS_NAME__
 from .types import Agent, Response
 
 # TODO: make this user configurable from `create_handoff`, 
@@ -36,6 +36,7 @@ def create_swarm_agent_as_tool(
     
     @tool(name=func_name, return_direct=return_direct)
     def _agent_as_tool():
+        """{description}"""
         return f"{AGENT_RESPONSE_PREFIX}{name}"
     _agent_as_tool.description = description
     return _agent_as_tool
@@ -172,7 +173,7 @@ def create_swarm_workflow(
                     __CTX_VARS_NAME__: state.get(__CTX_VARS_NAME__, {})
                 }
         
-        def _post_process(state: HandoffsState, agent_name: str):
+        def _post_process(state: AgentState, agent_name: str):
             messages = state["messages"]
             this_turn_messages = []
             # check the messages in this turn
