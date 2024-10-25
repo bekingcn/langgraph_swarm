@@ -1,9 +1,7 @@
-import os
-from typing import Literal
 from langchain_core.messages import HumanMessage
-from .router import create_swarm_workflow, Swarm, HandoffsState
-from .types import Agent, Response
-from .util import default_print_messages, create_default_llm, get_agent_name_from_message
+from .types import Agent, Response, HandoffsState
+from .util import default_print_messages, create_default_llm
+from .core import Swarm
 
 def run_demo_loop(
     starting_agent: Agent, 
@@ -23,7 +21,7 @@ def run_demo_loop(
         llm=llm,
         state_scheme=HandoffsState,
         debug=debug,
-        print_messages=print_messages if debug else None,
+        print_messages=print_messages,
     )
     messages = []
     current_agent = starting_agent.name
@@ -69,4 +67,4 @@ def run_demo_loop(
         current_agent = resp.agent
         context_variables = resp.context_variables
         handoff = resp.handoff  # for next turn, handoff always is true
-        print(f"Final Response ({current_agent}):\n", messages[-1].content)
+        print(f"Agent Response ({current_agent}):\n", messages[-1].content)

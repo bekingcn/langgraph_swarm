@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Callable, Optional, Sequence, Union
+from typing import Any, Dict, List, Callable, Optional, Sequence, TypedDict, Union
 from pydantic import BaseModel
 
 from langchain_core.tools import BaseTool
@@ -26,3 +26,13 @@ class Response(BaseModel):
     agent: Optional[str] = None
     context_variables: dict = {}
     handoff: bool = False
+
+
+class HandoffsState(TypedDict):
+    """The state of the agent handoffs to other agents."""
+
+    messages: Sequence[BaseMessage] = None
+    agent_name: Optional[str] = None
+    handoff: bool = False
+    user_end: bool = False
+    context_variables: dict = {}

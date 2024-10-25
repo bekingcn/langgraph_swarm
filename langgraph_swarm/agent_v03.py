@@ -314,15 +314,12 @@ def _create_swarm_agent(
         for last_message in reversed(state["messages"]):
             if not isinstance(last_message, ToolMessage):
                 break
-            # TODO: to be checked. handle tool response if context variables exist (swarm's implementation)
             # following the swarm's implementation, update the context variables back to state's context_variables
             # add the context variables into ToolMessage.artifact (tool.response_format=`content_and_artifact`)
             context_vars = state.get("context_variables", {})
             if last_message.artifact and isinstance(last_message.artifact, dict) and __CTX_VARS_NAME__ in last_message.artifact:
                 context_vars = _update_context_variables(context_vars, last_message.artifact[__CTX_VARS_NAME__])
-                
-            # NOTE: for now, this is a trick to identify handoff's name
-            #   another way is to identify it from tool name, and pass the map from tool name to agent name
+
             # if mutliple tools, we should find the latest one which has `next_agent` following the swarm's implementation
             agent_name = _handoff_map.get(last_message.name, None)
             if agent_name:

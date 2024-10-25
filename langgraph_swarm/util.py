@@ -7,7 +7,11 @@ from langchain_core.messages import (
     BaseMessage,
     SystemMessage,
 )
+from langchain_core.tools import tool
 
+# TODO: make this user configurable from `create_handoff`, 
+#   and resolve the agent name even it is a f-string
+AGENT_RESPONSE_PREFIX = "transferred to "
 
 DEFAULT_LITERAL = Literal["default"]
 
@@ -40,3 +44,18 @@ def create_default_llm(model_name=None):
     from langchain_openai import ChatOpenAI
     model_name = model_name or os.environ.get("MODEL_NAME", "gpt-4o")
     return ChatOpenAI(model=model_name)
+
+def create_swarm_agent_as_tool(
+        agent: str, 
+        func_name: str, 
+        description: str,
+        return_direct: bool = False,
+        injected_state: bool = False
+    ):
+    
+    @tool(func_name, return_direct=return_direct)
+    def _agent_as_tool():
+        """{description}"""
+        return f"{AGENT_RESPONSE_PREFIX}{agent}"
+    _agent_as_tool.description = description
+    return _agent_as_tool
