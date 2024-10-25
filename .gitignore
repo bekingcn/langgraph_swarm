@@ -119,5 +119,4 @@ chinook.db
 /*.png
 /*.json
 *.db
-# /notes/
-notes/lg.ipynb
+/notes-local

@@ -1,7 +1,38 @@
-from langchain_core.messages import HumanMessage
+from typing import Sequence
+
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage
 from .types import Agent, Response, HandoffsState
 from .util import default_print_messages, create_default_llm
 from .core import Swarm
+
+HANDOFF_MSG_MARKER = "handoff_msg"
+
+def filter_messages(messages: Sequence[BaseMessage], including_handoffs: bool = True) -> Sequence[BaseMessage]:
+    """
+    Filter out intermediate messages, and handoff messages if `including_handoffs` is False
+    This assume that only response messages are useful for following turns
+
+    Args:
+        messages (Sequence[BaseMessage]): messages (in last turn) to be filtered
+        including_handoffs (bool, optional): whether to include handoff messages. Defaults to True.
+
+    Returns:
+        Sequence[BaseMessage]: filtered messages to be used for following turns
+    """
+
+    filtered_messages = []
+    for message in messages:
+        # maybe human message which is from tool execution?
+        if isinstance(message, (AIMessage, HumanMessage)) and message.content.strip():
+            filtered_messages.append(message)
+        if isinstance(message, ToolMessage) and including_handoffs and HANDOFF_MSG_MARKER in message.additional_kwargs:
+            filtered_messages.append(message)
+    last_message = messages[-1]
+    last_added = filtered_messages[-1] if filtered_messages else None
+    # TODO: here we assume that last message should be returned (could be a tool message with `return_direct=True`)
+    if last_added and last_added != last_message:
+        filtered_messages.append(last_message)
+    return filtered_messages
 
 def run_demo_loop(
     starting_agent: Agent, 
@@ -12,6 +43,7 @@ def run_demo_loop(
     print_messages="default",
     max_turns: int = 25,
     user_inputs=[],
+    with_filter: bool = False,
 ) -> None:
     if print_messages == "default":
         print_messages = default_print_messages
@@ -63,8 +95,11 @@ def run_demo_loop(
                         print(f"==> {_chunk}")
         else:
             resp = ret
-        messages.extend(resp.messages)
+        messages.extend(filter_messages(resp.messages) if with_filter else resp.messages)        
         current_agent = resp.agent
         context_variables = resp.context_variables
         handoff = resp.handoff  # for next turn, handoff always is true
+
         print(f"Agent Response ({current_agent}):\n", messages[-1].content)
+        if context_variables:
+            print(f"Context Variables:\n", context_variables)

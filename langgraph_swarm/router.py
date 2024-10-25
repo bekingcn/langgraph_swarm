@@ -198,9 +198,13 @@ def create_swarm_workflow(
             for _msg in reversed(messages):
                 if not isinstance(_msg, ToolMessage):
                     break
-                if not next_agent and _msg.name in tools_to_handoffs:
+                if _msg.name in tools_to_handoffs:
                     # use the latest agent as the next agent
                     next_agent = tools_to_handoffs[_msg.name]
+                    # TODO: mark handoff (tool) message
+                    #   we can use this to filter out the messages and combine the history in the future
+                    _msg.additional_kwargs["handoff_msg"] = f"transferred to {next_agent} from {agent_name}"
+                    break
 
             if debug and next_agent:
                 print("==> handoff to: ", next_agent)

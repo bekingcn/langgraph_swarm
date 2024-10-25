@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, List, Callable, Optional, Sequence, TypedDict, Union
 from pydantic import BaseModel
 
@@ -8,9 +9,8 @@ from langchain_core.runnables import Runnable
 # following swarm's model
 class Agent(BaseModel):
     name: str = "Agent"
-    model: str = "llama3.2"
+    model: str = os.environ.get("MODEL_NAME") or "llama3.2"
     instructions: Union[str, SystemMessage, Callable[[], Sequence[BaseMessage]], Runnable] = "You are a helpful agent."
-    # instructions: StateModifier = "You are a helpful agent."
     handoffs: List["Agent"] = []
     backlink: bool = False
     functions: List[BaseTool] = []
